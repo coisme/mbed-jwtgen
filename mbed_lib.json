@@ -1,0 +1,7 @@
+{
+    "name": "jwtgen",
+    "macros": [
+        "MBEDTLS_RSA_C",
+        "MBEDTLS_ECP_C"
+    ]
+}
