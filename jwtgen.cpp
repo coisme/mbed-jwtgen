@@ -11,107 +11,152 @@
 #include "mbedtls/md.h"
 #include "mbedtls/pk.h"
 
-void JwtGenerator::setPrivateKey(const char* private_key_pem) {
-    _private_key_pem = (char *)private_key_pem;
-}
+#define LEN_EOS    1         // Length of end of string, i.e. length of '\0'
 
-JwtGenerator::Status JwtGenerator::getJwt(char* buf, const size_t buf_len, size_t *olen, const char* aud, time_t iat, time_t exp, JwtGenerator::Algorithm alg) {
+JwtGenerator::Status JwtGenerator::getJwt(char* buf, const size_t buf_len, 
+    size_t *olen, const char* private_key_pem, const char* aud, time_t iat,
+    time_t exp)
+{
+    Status status = SUCCESS;
+    int rc = 0;      // return code
+    int index = 0;   // index of buf[]
+
+    /*
+     * Parse private key and get an algorithm type
+     */
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    // Parse the private key
+    if((rc = mbedtls_pk_parse_key(&pk, (unsigned char *)private_key_pem,
+            strlen(private_key_pem) + 1, NULL, 0)) != 0) 
+    {
+        tr_err("Failed in mbedtls_pk_parse_key().");
+        return ERROR_PARSE_KEY;
+    }
+    Algorithm alg = ALG_RS256;
+    mbedtls_pk_type_t pk_type = mbedtls_pk_get_type(&pk);
+    if(pk_type == MBEDTLS_PK_RSA) {
+        alg = ALG_RS256;
+    } else if(pk_type == MBEDTLS_PK_ECDSA) {
+        alg = ALG_ES256;
+    } else {
+        tr_error("Bad key type.");
+        mbedtls_pk_free(&pk);
+        return ERROR_BAD_KEY_TYPE;
+    }
+
     /*
      * Create header
      */
-    const size_t max_header_len = 128;
-    char* header = new char[max_header_len];
-    char* str_rs256 = "RS256";
-    char* str_es256 = "ES256";
-    char* str_alg = (alg == ALG_RS256 ? str_rs256 : str_es256);
-    int header_len = snprintf(header, max_header_len, "{\"alg\": \"%s\", \"typ\": \"JWT\"}", str_alg);
-    // Todo: error handling
-    tr_debug(header);
+    const char* header_rs256 = "{\"alg\": \"RS256\", \"typ\": \"JWT\"}";
+    const char* header_es256 = "{\"alg\": \"ES256\", \"typ\": \"JWT\"}";
+    char* header = (char*)((alg == ALG_RS256) ? header_rs256 : header_es256);
+    tr_debug("header: %s", header);
 
-    const size_t max_header_b64_len = max_header_len + max_header_len / 2;
-    char* header_b64 = new char[max_header_b64_len];
     size_t header_b64_len = 0;
-    mbedtls_base64_encode((unsigned char*)header_b64, max_header_b64_len, &header_b64_len, (const unsigned char*)header, strlen(header));
-    // Todo: error handling
-    tr_debug(header_b64);
-    delete header;
+    rc = mbedtls_base64_encode((unsigned char*)buf, buf_len, &header_b64_len, 
+            (const unsigned char*)header, strlen(header));
+    if(rc != 0) {
+        // rc == MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL
+        tr_error("Failed to encode header into Base64. Buffer too small.");
+        return ERROR_BUFFER_SIZE_NOT_ENOUGH;
+    }
+    index = header_b64_len;
+    buf[index++] = '.';
+    tr_debug("base64(header): %.*s", header_b64_len, buf);
 
     /*
      * Create claim
      */
-    const size_t max_claim_len = 128;
-    char* claim = new char[max_claim_len];
-    int claim_len = snprintf(claim, max_claim_len, "{\"aud\": \"%s\", \"iat\": %ld, \"exp\": %ld}", aud, iat, exp);
-    tr_debug(claim);
-    // Todo: error handling
-
-    const size_t max_claim_b64_len = max_claim_len + max_claim_len / 2;
-    char* claim_b64 = new char[max_claim_b64_len];
+    // Store a claim into the given buffer temporary
+    int max_claim_len = buf_len - index - LEN_EOS;
+    rc = snprintf(buf+index, max_claim_len, "{\"aud\": \"%s\", \"iat\": %ld, \"exp\": %ld}", aud, iat, exp);
+    if(rc >= max_claim_len) {
+        tr_error("Failed to construct claim. Needs more buffer size.");
+        return ERROR_BUFFER_SIZE_NOT_ENOUGH;
+    }    
+    // Allocate a temporary memory area
+    char* claim = new char[rc + LEN_EOS];
+    // Copy the claim to the temporary area
+    strncpy(claim, buf+index, rc + LEN_EOS);
+    tr_debug("claim: %s", claim);
+    // Base64 encoding
     size_t claim_b64_len = 0;
-    mbedtls_base64_encode((unsigned char*)claim_b64, max_claim_b64_len, &claim_b64_len, (const unsigned char*)claim, strlen(claim));
-    // Todo: error handling
-    tr_debug(header_b64);
+    rc = mbedtls_base64_encode((unsigned char*)(buf+index), (buf_len - index), 
+            &claim_b64_len, (const unsigned char*)claim, strlen(claim));
+    if(rc != 0) {
+        // rc == MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL
+        tr_error("Failed to encode claim into Base64. Buffer too small.");
+        status = ERROR_BUFFER_SIZE_NOT_ENOUGH;
+    } else {
+        tr_debug("base64(claim): %.*s", claim_b64_len, buf+index);
+        index += claim_b64_len;
+        buf[index++] = '.';
+    }
+    // Delete the temporary memory area
     delete claim;
-
-    memcpy(buf, header_b64, header_b64_len);
-    buf[header_b64_len] = '.';
-    memcpy(buf+header_b64_len+1, claim_b64, claim_b64_len);
-    buf[header_b64_len+1+claim_b64_len] = '.';
-    int index = header_b64_len + 1 + claim_b64_len + 1;
 
     /*
      * Sign
      */ 
-    mbedtls_pk_context pk;
-    mbedtls_entropy_context entropy;
-    mbedtls_ctr_drbg_context ctr_drbg;
     const char *pers = "mbedtls_pk_sign";
-    int ret = -1;
-
-    mbedtls_entropy_init( &entropy );
-    mbedtls_ctr_drbg_init( &ctr_drbg );
-    mbedtls_pk_init( &pk );
+    mbedtls_ctr_drbg_context ctr_drbg;
+    mbedtls_ctr_drbg_init(&ctr_drbg);
 
     // Set up entropy
-    if( ( ret = mbedtls_ctr_drbg_seed( &ctr_drbg, mbedtls_entropy_func, &entropy,
-                               (const unsigned char *) pers,
-                               strlen( pers ) ) ) != 0 )
-    {
-        tr_err("err1");
-        return ERROR;
-    }
-
-    // Parse the private key
-    if((ret = mbedtls_pk_parse_key(&pk, (unsigned char *)_private_key_pem,
-            strlen(_private_key_pem) + 1, NULL, 0)) != 0) {
-        tr_err("err2");
-        return ERROR;
+    if(rc == 0) {
+        mbedtls_entropy_context entropy;
+        mbedtls_entropy_init(&entropy);
+        rc = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
+                (const unsigned char *)pers, strlen(pers));
+        if(rc != 0) {
+            // MBEDTLS_ERR_CTR_DRBG_ENTROPY_SOURCE_FAILED
+            tr_err("Failed in mbed_tls_ctr_drbg_seed().");
+            status = ERROR;
+        }
+        mbedtls_entropy_free(&entropy);
     }
 
     // Calculate hash
     unsigned char hash[32];
-    mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), (const unsigned char*)buf, header_b64_len + 1 + claim_b64_len, hash);
-    tr_debug("Hash calculated.");
+    if(rc == 0) {
+        rc = mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 
+                (const unsigned char*)buf, header_b64_len + 1 + claim_b64_len, hash);
+        if(rc != 0) {
+            // MBEDTLS_ERR_MD_BAD_INPUT_DATA
+            status = ERROR;
+        } else {
+            tr_debug("Hash calculated.");
+        }
+    }
 
     // Sign
-    char* sig = new char[1024];
-    size_t siglen = 0;
-    if( ( ret = mbedtls_pk_sign( &pk, MBEDTLS_MD_SHA256, hash, 0, (unsigned char*)sig, &siglen,
-                            mbedtls_ctr_drbg_random, &ctr_drbg ) ) != 0 )
-        {
-            tr_err("err3");
-            return ERROR;
+    size_t len_sig;
+    if(rc == 0) {
+        rc = mbedtls_pk_sign( &pk, MBEDTLS_MD_SHA256, hash, 0, (unsigned char*)(buf+index),
+                &len_sig, mbedtls_ctr_drbg_random, &ctr_drbg);
+        if(rc != 0) {
+            tr_err("Failed in mbedtls_pk_sign.");
+            status = ERROR_PARSE_KEY;
         }
-    tr_debug("Signing done.");
+    }
+    mbedtls_ctr_drbg_free(&ctr_drbg);
+    mbedtls_pk_free(&pk);
 
-    // Base64 encode
-    size_t sub_len = 0;
-    mbedtls_base64_encode((unsigned char*)(buf+index), (buf_len - index), &sub_len, (const unsigned char*)sig, siglen);
-    tr_debug("Base64 encoded.");
+    // Copy to a temporary buffer
+    if(rc == 0) {
+        char* sign = new char[len_sig];
+        memcpy(sign, buf+index, len_sig);
+        tr_debug("Signing done.");
 
-    delete sig;
+        // Base64 encode
+        size_t sign_b64_len;
+        mbedtls_base64_encode((unsigned char*)(buf+index), (buf_len - index), &sign_b64_len,
+                (const unsigned char*)sign, len_sig);
+        tr_debug("Base64 encoded.");
+        delete sign;
+        *olen = header_b64_len + strlen(".") + claim_b64_len + strlen(".") + sign_b64_len;
+    }
 
-    *olen = header_b64_len + strlen(".") + claim_b64_len + strlen(".") + sub_len;
-
-    return SUCCESS;
+    return status;
 }
