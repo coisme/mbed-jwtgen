@@ -2,6 +2,7 @@
 #define __JWTGEN_H__
 
 #include "mbed.h"
+#include "mbedtls/pk.h"
 
 class JwtGenerator {
 public:
@@ -38,6 +39,55 @@ public:
      */
     static Status getJwt(char* buf, const size_t buf_len, size_t *olen, const char* private_key_pem,
             const char* aud, time_t iat, time_t exp);
+
+private:
+    /* Gets key type from the given private key in PEM format.
+     *
+     * @param t_pk Pointer to the key type store.
+     * @param private_key_pem Pointer to your private key in PEM format.
+     * 
+     * @return SUCCESS when succeed. ERROR_* in failure.
+     */
+    static Status getKeyType(mbedtls_pk_type_t* t_pk, const char* private_key_pem);
+    
+    /* Gets a header part of JWT.
+     *
+     * @param buf Pointer to the buffer to store the header string in Base64 format.
+     * @param buf_len Length of the buffer.
+     * @param olen Pointer to a variable which stores the length of Base64 encoded header string.
+     * @param t_pk Key type.
+     * 
+     * @return SUCCESS when succeed. ERROR* in failure.
+     */
+    static Status getHeaderBase64(char* buf, size_t buf_len, size_t *olen, mbedtls_pk_type_t t_pk);
+
+    /* Gets a claim part of JWT.
+     *
+     * @param buf Pointer to the buffer to store the claim string in Base64 format.
+     * @param buf_len Length of the buffer.
+     * @param olen Pointer to a variable which stores the length of Base64 encoded claim string.
+     * @param aud Pointer to an Audience field value.
+     * @param iat Issued At field value.
+     * @param exp Expiration field value.
+     * 
+     * @return SUCCESS when succeed. ERROR* in failure.
+     * 
+     * @note Project ID in Google Cloud IoT Core should be put into the Audience field.
+     */
+    static Status getClaimBase64(char *buf, size_t buf_len, size_t *olen, const char* aud, time_t iat, time_t exp);
+
+    /* Gets a signature part of JWT.
+     *
+     * @param buf Pointer to the buffer to store the sign string in Base64 format.
+     * @param buf_len Length of the buffer.
+     * @param olen Pointer to a variable which stores the length of Base64 encoded sign string.
+     * @param blob Pointer to the string which to be hashed, i.e. "{Base64 encoded header}.{Base64 encoded claim}".
+     * @param blob_len Length of the blob.
+     * @param private_key_pem Pointer to your private key stored in PEM format.
+     * 
+     * @return SUCCESS when succeed. ERROR* in failure.
+     */    
+    static Status getSignatureBase64(char *buf, size_t buf_len, size_t *olen, const char* blob, size_t blob_len, const char* private_key_pem);
 };
 
 #endif
