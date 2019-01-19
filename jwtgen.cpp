@@ -10,12 +10,14 @@
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/md.h"
 #include "mbedtls/pk.h"
+#include "sstream"
+#include "string"
 
 #define LEN_EOS    1         // Length of end of string, i.e. length of '\0'
 
 JwtGenerator::Status JwtGenerator::getJwt(char* buf, const size_t buf_len, 
-    size_t *olen, const char* private_key_pem, const char* aud, time_t iat,
-    time_t exp)
+    size_t *olen, const char* private_key_pem, const char* aud, const time_t & iat,
+    const time_t & exp)
 {
     Status status = SUCCESS;
     int rc = 0;      // return code
@@ -118,10 +120,17 @@ JwtGenerator::Status JwtGenerator::getHeaderBase64(
 
 
 JwtGenerator::Status JwtGenerator::getClaimBase64(
-        char *buf, size_t buf_len, size_t *olen, const char* aud, time_t iat, time_t exp) 
+        char *buf, size_t buf_len, size_t *olen, const char* aud, 
+        const time_t & iat, const time_t & exp) 
 {
-    int len = snprintf(buf, buf_len, 
-            "{\"aud\": \"%s\", \"iat\": %ld, \"exp\": %ld}", aud, iat, exp);
+    std::stringstream stream;
+    stream << "{\"aud\": \"" << aud << "\", \"iat\": " 
+           << static_cast<uint64_t>(iat) << ", \"exp\": " 
+           << static_cast<uint64_t>(exp) << "}";
+    std::string claimString = stream.str();
+    tr_debug("stream: %s", claimString.c_str());
+    strcpy(buf, claimString.c_str());
+    size_t len = claimString.size();
 
     if(len >= buf_len) {
         tr_error("Failed to construct claim. Needs more buffer size.");
