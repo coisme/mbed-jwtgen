@@ -148,6 +148,8 @@ JwtGenerator::Status JwtGenerator::getClaimBase64(
             olen, (const unsigned char*)claim, strlen(claim)) != 0) {
         // rc == MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL
         tr_error("Failed to encode claim into Base64. Buffer too small.");
+        // Delete the temporary memory area
+        delete claim;
         return ERROR_BUFFER_SIZE_NOT_ENOUGH;
     }
     // Delete the temporary memory area
