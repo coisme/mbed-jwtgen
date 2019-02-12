@@ -38,7 +38,7 @@ public:
      * 
      */
     static Status getJwt(char* buf, const size_t buf_len, size_t *olen, const char* private_key_pem,
-            const char* aud, time_t iat, time_t exp);
+            const char* aud, const time_t & iat, const time_t & exp);
 
 private:
     /* Gets key type from the given private key in PEM format.
@@ -74,7 +74,7 @@ private:
      * 
      * @note Project ID in Google Cloud IoT Core should be put into the Audience field.
      */
-    static Status getClaimBase64(char *buf, size_t buf_len, size_t *olen, const char* aud, time_t iat, time_t exp);
+    static Status getClaimBase64(char *buf, size_t buf_len, size_t *olen, const char* aud, const time_t & iat, const time_t & exp);
 
     /* Gets a signature part of JWT.
      *
